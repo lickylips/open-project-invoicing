@@ -283,18 +283,17 @@ function writeTimeEntries(){
   for(i=2; i<billableSheet.getLastRow()+1; i++){
     let range = billableSheet.getRange(i, 1, 1, billableSheet.getLastColumn());
     let rowData = range.getValues();
-    let rowTimeId = rowData[0][headerCols.timeEntryIdCol];
-    let invoice = rowData[0][headerCols.invoiceNumberCol];
+    let rowTimeId = rowData[0][headerCols.timeEntryIdCol];//get the time ID of this row
+    let invoice = rowData[0][headerCols.invoiceNumberCol];//get if this row has a created invoice listed
     Logger.log("Processing Row "+range.getA1Notation()+" With time id "+ rowTimeId);
-    //Identify rows to delete if time ID is no longer present
+    //Identify rows to delete if time ID is no longer present and row has not been invoiced yet
     if(newTimeIds.indexOf(rowTimeId)==-1 && !invoice){
-      Logger.log("Time ID "+rowTimeId+" No Longer Exists, Deleting Row "+range.getA1Notation());
+      Logger.log("Time ID "+rowTimeId+" No Longer Exists, marking row for deletion "+range.getA1Notation());
       toDelete.push(range.getRow());
-      
     }
 
-    //If new time ID is present in row and the row hasn't been indexed update relivant fields and drop new time id 
-    if(newTimeIds.indexOf(rowTimeId)!=-1 && invoice){
+    //If new time ID is present in row update relivant fields and drop new time id 
+    if(newTimeIds.indexOf(rowTimeId)!=-1){
       Logger.log("Time ID "+rowTimeId+" Exists on row "+range.getA1Notation()+". Updating row & dropping Item")
       let newHour
       for(k in newHours){
