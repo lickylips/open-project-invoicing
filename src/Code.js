@@ -1,3 +1,7 @@
+/**
+ * On Open of billable hours spreadsheet
+ * 
+ */
 function onOpen() {
   var ui = SpreadsheetApp.getUi();
   // Create a main menu item
@@ -6,6 +10,12 @@ function onOpen() {
       .addItem("Import Open Project Data", "writeTimeEntries")
       .addToUi();
 }
+
+/**
+ * getSettings - Function to get settings from the tab called "Settings" in the spreadsheet
+ * @param {string} docId 
+ * @return {object} settings object containing the settings  
+ */
 function getSettings(docId){
   const ss = SpreadsheetApp.openById(docId);
   const settingsSheet = ss.getSheetByName("Settings");
@@ -17,6 +27,11 @@ function getSettings(docId){
   return settings;
 }
 
+/**
+ * getDetails pulls billable hours from the spreadsheet to include in the next invoice
+ * @param {string} docId 
+ * @returns {array} details An array of classes containing details to be invoiced
+ */
 function getDetails(docId){
   const ss = SpreadsheetApp.openById(docId);
   const settings = getSettings(docId);
@@ -77,6 +92,11 @@ function getDetails(docId){
   return details;
 }
 
+/**
+ * buildInvoice A function to build an invoice document
+ * @param {object} settings 
+ * @param {array} details 
+ */
 function buildInvoice(settings, details){
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const detailSheet = ss.getSheetByName("Billable Hours");
@@ -134,6 +154,9 @@ function buildInvoice(settings, details){
   body.replaceText("{{TOTAL PRICE}}", "€"+parseFloat(total).toFixed(2));
 }
 
+/**
+ * runMain Function that will be called from the spreadsheet to create an invoice
+ */
 function runMain(){
   const docId = SpreadsheetApp.getActiveSpreadsheet().getId();
   const details = getDetails(docId);
@@ -172,6 +195,12 @@ const GOOGLEMAPS_DISTANCE = (origin, destination, mode) => {
   return distance;
 };
 
+
+/**
+ * importJSON function to take url and return data
+ * @param {string} url 
+ * @returns 
+ */
 function importJSON(url) {
     let username = "apikey";
     let password = "eae40f509c71e16019bbd96c0923d7e0ed52c03b2af7452c0bb287ff6889bd8e"
@@ -187,10 +216,13 @@ function importJSON(url) {
     var json = response.getContentText();
     var data = JSON.parse(json);
     return data;
-    // OR return data[“attribute“];
-    // OR return data.attribute;
 } 
 
+/**
+ * fetchOpenProjectData function to pull the required info from open project
+ * @param {object} settings 
+ * @returns 
+ */
 function fetchOpenProjectData(settings){
   const baseUrl = settings.apiBaseUrl;
   const projectsUrl = generateProjectAPICall(settings.companyProjectString);
@@ -223,6 +255,9 @@ function fetchOpenProjectData(settings){
   return output
 }
 
+/**
+ * writeTimeEntries function called from the spreadsheet to write new time entries
+ */
 function writeTimeEntries(){
   Logger.log("Updateing Data From OpenProject")
   const ss = SpreadsheetApp.getActiveSpreadsheet(); //open spreadsheet
@@ -306,7 +341,11 @@ function writeTimeEntries(){
     billableSheet.deleteRow(row);
   }
 }
-
+/**
+ * Function to figure ot the columns of the data
+ * @param {array} headerRow row containing headers  
+ * @returns 
+ */
 function billableHeaders(headerRow){
   const headers = {};
   for(i in headerRow){
@@ -324,6 +363,11 @@ function billableHeaders(headerRow){
   return headers;
 }
 
+/**
+ * Function to generate the URL required to call projects
+ * @param {*} string 
+ * @returns 
+ */
 function generateProjectAPICall(string) {
   const baseUrl = "https://projects.lickylips.duckdns.org";
   let url = baseUrl+"/api/v3/projects/?";
@@ -341,6 +385,12 @@ function generateProjectAPICall(string) {
   url += "&pageSize=" + pageSize;
   return encodeURI(url);
 }
+
+/**
+ * Function to generate the URL required to call work packages
+ * @param {*} string 
+ * @returns 
+ */
 function generateWorkPackageAPICall(string) {
   const baseUrl = "https://projects.lickylips.duckdns.org";
   let url = baseUrl+"/api/v3/projects/";
@@ -359,6 +409,11 @@ function generateWorkPackageAPICall(string) {
   return encodeURI(url);
 }
 
+/**
+ * convertDurationToHours function to take a string of duration and convert it to an amount of hours
+ * @param {string} durationString 
+ * @returns 
+ */
 function convertDurationToHours(durationString) {
   // Extract hours, minutes, and seconds using regular expressions
   var regex = /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/;
