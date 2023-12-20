@@ -1,15 +1,4 @@
-/**
- * On Open of billable hours spreadsheet
- * 
- */
-function onOpen() {
-  var ui = SpreadsheetApp.getUi();
-  // Create a main menu item
-  ui.createMenu('Invoicing')
-      .addItem('Generate Invoices', 'runMain')
-      .addItem("Import Open Project Data", "writeTimeEntries")
-      .addToUi();
-}
+
 
 /**
  * getSettings - Function to get settings from the tab called "Settings" in the spreadsheet
@@ -24,6 +13,7 @@ function getSettings(docId){
   for(i in settingsArray){
     settings[settingsArray[i][0]] = settingsArray[i][1];
   }
+  settings.docId = ss.getId();
   return settings;
 }
 
@@ -196,27 +186,7 @@ const GOOGLEMAPS_DISTANCE = (origin, destination, mode) => {
 };
 
 
-/**
- * importJSON function to take url and return data
- * @param {string} url 
- * @returns 
- */
-function importJSON(url) {
-    let username = "apikey";
-    let password = "eae40f509c71e16019bbd96c0923d7e0ed52c03b2af7452c0bb287ff6889bd8e"
-    let apiToken = Utilities.base64Encode(username+":"+password);
-    var headers = {
-        "Authorization" : "Basic "+apiToken, // Insert a Basic Auth Token of an OpenProject account to get access to the API
-    };
-    var params = {
-        "method": "GET",
-        "headers": headers
-    };
-    var response = UrlFetchApp.fetch(url, params);
-    var json = response.getContentText();
-    var data = JSON.parse(json);
-    return data;
-} 
+
 
 /**
  * fetchOpenProjectData function to pull the required info from open project
@@ -226,7 +196,7 @@ function importJSON(url) {
 function fetchOpenProjectData(settings){
   const baseUrl = settings.apiBaseUrl;
   const projectsUrl = generateProjectAPICall(settings.companyProjectString);
-  let data = importJSON(projectsUrl);
+  let data = importJSON(projectsUrl, settings.docId);
   const output = [];
   for(element of data._embedded.elements){
     let workPackageUrl = generateWorkPackageAPICall(element.id);
@@ -256,90 +226,77 @@ function fetchOpenProjectData(settings){
 }
 
 /**
- * writeTimeEntries function called from the spreadsheet to write new time entries
+ * importTimeEntries - Function to import time entries to spreadsheet
+ * 
  */
-function writeTimeEntries(){
-  Logger.log("Updateing Data From OpenProject")
-  const ss = SpreadsheetApp.getActiveSpreadsheet(); //open spreadsheet
-  const settings = getSettings(ss.getId()); //pull settings
-  const billableSheet = ss.getSheetByName("Billable Hours"); //get the sheet we will write to
-  const existingHours = billableSheet.getDataRange().getValues(); //get the existing data
-  const newHours = fetchOpenProjectData(settings);
-  const headerCols = billableHeaders(existingHours[0]); //find the col numbers of the existing data
-  existingHours.shift(); //Drop the header row from the existing data
-  //create array of existing timeIds
-  const existingTimeIdsRaw = billableSheet.getRange(2, headerCols.timeEntryIdCol+1,billableSheet.getLastRow()-1).getValues();
-  const existingTimeIds = [];
-  for(row of existingTimeIdsRaw){
-    existingTimeIds.push(row);
-  }
-  //create array of new time IDs
-  const newTimeIds = []
-  for(row of newHours){
-    newTimeIds.push(row.timeEntryId);
-  }
-  let toDelete = []; //Initialise variable for deleting obsolete rows
-  //Iterate through each row in the billable sheet
-  for(i=2; i<billableSheet.getLastRow()+1; i++){
-    let range = billableSheet.getRange(i, 1, 1, billableSheet.getLastColumn());
-    let rowData = range.getValues();
-    let rowTimeId = rowData[0][headerCols.timeEntryIdCol];//get the time ID of this row
-    let invoice = rowData[0][headerCols.invoiceNumberCol];//get if this row has a created invoice listed
-    Logger.log("Processing Row "+range.getA1Notation()+" With time id "+ rowTimeId);
-    //Identify rows to delete if time ID is no longer present and row has not been invoiced yet
-    if(newTimeIds.indexOf(rowTimeId)==-1 && !invoice){
-      Logger.log("Time ID "+rowTimeId+" No Longer Exists, marking row for deletion "+range.getA1Notation());
-      toDelete.push(range.getRow());
+function importTimeEntries() {
+  // Get the active spreadsheet
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  // Get the settings from the settings worksheet
+  const settings = getSettings(ss.getId());
+  // Get the billable hours sheet
+  const billableSheet = ss.getSheetByName("Billable Hours");
+  // Get the header row and find the right column numbers
+  const headerCols = billableHeaders(billableSheet.getRange(1, 1, 1, billableSheet.getLastColumn()).getValues()[0]);
+  // Get the data from the billable hours sheet
+  const billableHours = billableSheet.getRange(2, headerCols.dateCol + 1, billableSheet.getLastRow() - 1, billableSheet.getLastColumn()).getValues();
+  // Create the time entries array
+  const timeEntries = [];
+  let bsRow = 2;
+  let lastTimeEntryId = 0;
+  // Iterate through each row in the billable hours sheet
+  for (row of billableHours) {
+    let timeEntry = createTimeEntry(row, headerCols);
+    timeEntry.row = bsRow;
+    // Check if the time entry is invoiced if not update sheet
+    if(timeEntry.invoiced === false){
+      Logger.log("Not Invoiced, needs updating row "+bsRow+" with time entry id "+timeEntry.timeEntryId);
+      let updatedTimeEntry = createTimeEntryObject(timeEntry.timeEntryId, settings);
+      updatedTimeEntry.row = bsRow;
+      Logger.log(updatedTimeEntry)
+      updateRow(updatedTimeEntry, headerCols);
     }
-
-    //If new time ID is present in row update relivant fields and drop new time id 
-    if(newTimeIds.indexOf(rowTimeId)!=-1){
-      Logger.log("Time ID "+rowTimeId+" Exists on row "+range.getA1Notation()+". Updating row & dropping Item")
-      let newHour
-      for(k in newHours){
-        if(newHours[k].timeEntryId == rowTimeId){
-            newHour=newHours[k];
-            newHours.splice(Number(k), 1);
-          }
+    bsRow++;
+    timeEntries.push(timeEntry);
+    // Check if the time entry ID is greater than the last time entry ID
+    if(lastTimeEntryId < timeEntry.timeEntryId){
+      lastTimeEntryId = timeEntry.timeEntryId;
+    }
+  }
+  // Find the URL for the api call that will pull un imported time entries
+  Logger.log("Last Time Entry ID "+lastTimeEntryId);
+  const now = new Date();
+  const dateOfLastTimeEntry = Utilities.parseDate(createTimeEntryObject(lastTimeEntryId, settings).createdAt, "GMT", "yyyy-MM-dd'T'HH:mm:ss'Z'");
+  const start = new Date(dateOfLastTimeEntry.getTime()+1000);
+  const filters = [
+    {
+      "created_at": {
+        "operator": "<>d",
+        "values": [start, now.toISOString()]
       }
-      Logger.log(newHour)
-      billableSheet.getRange(range.getRow(), headerCols.dateCol + 1).setValue(newHour.date);
-      billableSheet.getRange(range.getRow(), headerCols.hoursCol + 1).setValue(newHour.hours);
-      billableSheet.getRange(range.getRow(), headerCols.notesCol + 1).setValue(newHour.title + " - " + newHour.comment);
     }
-    Logger.log("=====================================");
-  }
+  ];
+  let url = "https://projects.lickylips.duckdns.org/api/v3/time_entries/?"+"filters="+JSON.stringify(filters);
+  let stringifyUrl = encodeURI(url);
+  Logger.log(stringifyUrl);
 
-  //Write new hours to sheet
-  for(i in newHours){
-    Logger.log("Adding new Time Entry " + newHours[i].timeEntryId);
-    let row = newHours[i];
-    let newRow = [
-        row.date,
-        row.project,
-        row.hours,
-        settings.companyName,
-        false,
-        settings.rate,
-        row.hours * settings.rate,
-        "",
-        row.title + " - " + row.comment,
-        row.timeEntryId
-    ];
-    let newSheetRow = billableSheet.appendRow(newRow);
-    newSheetRow.getRange(billableSheet.getLastRow(), headerCols.invoicedCol + 1)
-        .insertCheckboxes();
-    let rateCell = newSheetRow.getRange(billableSheet.getLastRow(), headerCols.rateCol + 1).getA1Notation();
-    let hoursCell = newSheetRow.getRange(billableSheet.getLastRow(), headerCols.hoursCol + 1).getA1Notation();
-    newSheetRow.getRange(billableSheet.getLastRow(), headerCols.amountCol + 1)
-        .setFormula("=" + rateCell + "*" + hoursCell);
-  }
-  //Delete obsolete rows
-  for(row of toDelete){
-    Logger.log("Deleting Obsolete Row "+row);
-    billableSheet.deleteRow(row);
+  // Get the un imported time entries
+  const newTimeEntryResult = importJSON(stringifyUrl, settings);
+  const newTimeEntries = newTimeEntryResult._embedded.elements;
+  Logger.log(newTimeEntries.length)
+  for(newTimeEntry of newTimeEntries){
+    Logger.log("New Time Entry "+newTimeEntry.id);
+    let newTimeEntryObject = createTimeEntryObject(newTimeEntry.id, settings);
+    newTimeEntryObject.row = bsRow;
+    bsRow++;
+    timeEntries.push(newTimeEntryObject);
+    newTimeEntryObject.invoiced = false;
+    newTimeEntryObject.invoiceNumber = "";
+    Logger.log("Adding new Time Entry " + newTimeEntryObject.timeEntryId+" on row "+bsRow);
+    updateRow(newTimeEntryObject, headerCols);
   }
 }
+
 /**
  * Function to figure ot the columns of the data
  * @param {array} headerRow row containing headers  
@@ -363,50 +320,47 @@ function billableHeaders(headerRow){
 }
 
 /**
- * Function to generate the URL required to call projects
- * @param {*} string 
+ * Function to create a time entry object
+ * @param {array} row row containing data
+ * @param {object} headers object containing the columns
+ * @returns {object} timeEntry object
+ */
+ function createTimeEntry(row, headers){
+  const timeEntry = {};
+  timeEntry.date = row[headers.dateCol];
+  timeEntry.project = row[headers.projectCol];
+  timeEntry.hours = row[headers.hoursCol];
+  timeEntry.company = row[headers.companyCol];
+  timeEntry.invoiced = row[headers.invoicedCol];
+  timeEntry.rate = row[headers.rateCol];
+  timeEntry.amount = row[headers.amountCol];
+  timeEntry.invoiceNumber = row[headers.invoiceNumberCol];
+  timeEntry.notes = row[headers.notesCol];
+  timeEntry.timeEntryId = row[headers.timeEntryIdCol];
+  return timeEntry;
+ }
+
+ /**
+ * importJSON function to take url and return data
+ * @param {string} url 
  * @returns 
  */
-function generateProjectAPICall(string) {
-  const baseUrl = "https://projects.lickylips.duckdns.org";
-  let url = baseUrl+"/api/v3/projects/?";
-  const filters = [
-    {
-      "name_and_identifier": {
-        "operator": "~",
-        "values": [string]
-      }
-    }
-  ];
-  const pageSize = 100;
-
-  url += "filters=" + JSON.stringify(filters);
-  url += "&pageSize=" + pageSize;
-  return encodeURI(url);
-}
-
-/**
- * Function to generate the URL required to call work packages
- * @param {*} string 
- * @returns 
- */
-function generateWorkPackageAPICall(string) {
-  const baseUrl = "https://projects.lickylips.duckdns.org";
-  let url = baseUrl+"/api/v3/projects/";
-  url += string+"/work_packages/?";
-  const pageSize = 100;
-  const filters = [
-    {
-      "status":{
-        "operator": "*",
-        "values": []
-      }
-    }
-  ];
-  url += "filters="+JSON.stringify(filters);
-  url += "&pageSize=" + pageSize;
-  return encodeURI(url);
-}
+function importJSON(url, settings) {
+  const username = "apikey";
+  const password = settings.apiKey
+  const apiToken = Utilities.base64Encode(username+":"+password);
+  const headers = {
+      "Authorization" : "Basic "+apiToken, // Insert a Basic Auth Token of an OpenProject account to get access to the API
+  };
+  const params = {
+      "method": "GET",
+      "headers": headers
+  };
+  const response = UrlFetchApp.fetch(url, params);
+  const json = response.getContentText();
+  const data = JSON.parse(json);
+  return data;
+} 
 
 /**
  * convertDurationToHours function to take a string of duration and convert it to an amount of hours
@@ -431,3 +385,58 @@ function convertDurationToHours(durationString) {
   }
 }
 
+/**
+ * updateRow function to update a row in a spreadsheet
+ * @param {object} timeEntry object
+ */
+function updateRow(timeEntry, headerCols) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const billableSheet = ss.getSheetByName("Billable Hours");
+  const row = [];
+  row[headerCols.dateCol] = timeEntry.date;
+  row[headerCols.projectCol] = timeEntry.project;
+  row[headerCols.hoursCol] = timeEntry.hours;
+  row[headerCols.companyCol] = timeEntry.company;
+  row[headerCols.invoicedCol] = timeEntry.invoiced;
+  row[headerCols.rateCol] = timeEntry.rate;
+  row[headerCols.amountCol] = timeEntry.hours * timeEntry.rate;
+  row[headerCols.invoiceNumberCol] = timeEntry.invoiceNumber;
+  row[headerCols.notesCol] = timeEntry.notes;
+  row[headerCols.timeEntryIdCol] = timeEntry.timeEntryId;
+  billableSheet.getRange(timeEntry.row, 1, 1, billableSheet.getLastColumn()).setValues([row]);
+  billableSheet.getRange(timeEntry.row, headerCols.invoicedCol+1).insertCheckboxes();
+}
+
+/**Function to create a time entry object from the result of an api call
+ * @param {object} timeEntryResult result of time entry api call
+ * @param {object} settings object containing settings
+ * @returns {object} timeEntry object
+ */
+function createTimeEntryObject(timeEntryId, settings) {
+  const url = "https://projects.lickylips.duckdns.org/api/v3/time_entries/"+timeEntryId;
+  const timeEntryResult = importJSON(url, settings);
+  const timeEntry = {};
+  timeEntry.date = timeEntryResult.spentOn;
+  timeEntry.project = timeEntryResult._embedded.project.name;
+  timeEntry.hours = convertDurationToHours(timeEntryResult.hours);
+  timeEntry.company = settings.companyName;
+  timeEntry.rate = settings.rate;
+  timeEntry.amount = timeEntry.hours * settings.rate;
+  timeEntry.notes = timeEntryResult._embedded.workPackage.subject + " - " + timeEntryResult.comment.raw;
+  timeEntry.timeEntryId = timeEntryResult.id;
+  timeEntry.createdAt = timeEntryResult.createdAt;
+  return timeEntry;
+}
+
+/**
+ * On Open of billable hours spreadsheet
+ * 
+ */
+function onOpen() {
+  var ui = SpreadsheetApp.getUi();
+  // Create a main menu item
+  ui.createMenu('Invoicing')
+      .addItem('Generate Invoices', 'runMain')
+      .addItem("Import Open Project Data", "importTimeEntries")
+      .addToUi();
+}
